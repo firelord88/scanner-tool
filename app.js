@@ -176,6 +176,8 @@
     $('f-notes').value = it.notes || '';
     $('form-title').textContent = editing ? 'Edit item' : 'Add item';
     $('btn-save').textContent = editing ? 'Save changes' : 'Save item';
+    $('f-expiry').classList.remove('needs-check');
+    $('ocr-chips').hidden = true;
   }
   function clearForm() {
     const keepLocation = $('f-location').value; // usually scanning a whole bag/compartment in a row
@@ -318,6 +320,111 @@
       handleCode(text);
     } catch (err) {
       $('scan-status').textContent = 'No barcode found in that photo. Try again closer, with good light.';
+    }
+  });
+
+  // ---------- Read printed expiry date from a photo (OCR) ----------
+  const TESSERACT_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+  let ocrWorkerPromise = null;
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('could not download text reader'));
+      document.head.appendChild(s);
+    });
+  }
+  function getOcrWorker(onProgress) {
+    if (!ocrWorkerPromise) {
+      ocrWorkerPromise = (window.Tesseract ? Promise.resolve() : loadScript(TESSERACT_URL))
+        .then(() => Tesseract.createWorker('eng', 1, {
+          logger: (m) => onProgress && onProgress(m),
+        }))
+        .catch((e) => { ocrWorkerPromise = null; throw e; });
+    }
+    return ocrWorkerPromise;
+  }
+
+  /** Shrink, greyscale and boost contrast so small printed/embossed text reads better. */
+  async function prepareImage(file, invert) {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0, c.width, c.height);
+    const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
+    let min = 255, max = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      d[i] = g; if (g < min) min = g; if (g > max) max = g;
+    }
+    const range = Math.max(1, max - min);
+    for (let i = 0; i < d.length; i += 4) {
+      let g = ((d[i] - min) / range) * 255;
+      if (invert) g = 255 - g;
+      d[i] = d[i + 1] = d[i + 2] = g;
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
+  let ocrCurrentFile = null;
+  function setOcrStatus(msg) { $('ocr-status').textContent = msg; }
+
+  function showDateChoices(cands) {
+    const box = $('ocr-chips');
+    box.innerHTML = cands.slice(0, 5).map((c, i) =>
+      `<button type="button" class="chip${i === 0 ? ' selected' : ''}" data-date="${c.date}">${fmtDate(c.date)}<small>“${esc(c.raw)}”</small></button>`).join('');
+    box.hidden = cands.length < 2;
+  }
+  $('ocr-chips').addEventListener('click', (e) => {
+    const b = e.target.closest('.chip');
+    if (!b) return;
+    $('f-expiry').value = b.dataset.date;
+    $('ocr-chips').querySelectorAll('.chip').forEach((x) => x.classList.toggle('selected', x === b));
+  });
+  $('f-expiry').addEventListener('input', () => $('f-expiry').classList.remove('needs-check'));
+
+  $('ocr-photo').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    ocrCurrentFile = file;
+    await stopCamera();
+    const btn = $('btn-ocr');
+    btn.classList.add('busy');
+    $('ocr-chips').hidden = true;
+    try {
+      setOcrStatus('Getting text reader ready… (first time needs internet, ~10 MB)');
+      const worker = await getOcrWorker((m) => {
+        if (m.status === 'recognizing text') setOcrStatus(`Reading text… ${Math.round(m.progress * 100)}%`);
+      });
+      setOcrStatus('Reading text…');
+      let text = (await worker.recognize(await prepareImage(file, false))).data.text;
+      let cands = ExpiryDates.extract(text);
+      if (!cands.length) {
+        // Embossed/light-on-dark print often reads better inverted.
+        text += '\n' + (await worker.recognize(await prepareImage(file, true))).data.text;
+        cands = ExpiryDates.extract(text);
+      }
+      if (file !== ocrCurrentFile) return; // a newer photo was taken meanwhile
+      if (!cands.length) {
+        setOcrStatus('Couldn’t find a date. Try again closer, in good light, holding the phone straight — or type it in.');
+        return;
+      }
+      $('f-expiry').value = cands[0].date;
+      $('f-expiry').classList.add('needs-check');
+      showDateChoices(cands);
+      setOcrStatus(cands.length > 1
+        ? `Found ${cands.length} dates — picked ${fmtDate(cands[0].date)}. Tap another if that’s wrong. Check against the package.`
+        : `Found ${fmtDate(cands[0].date)} (read as “${cands[0].raw}”). Check it against the package.`);
+      if (navigator.vibrate) navigator.vibrate(80);
+      $('f-expiry').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (err) {
+      setOcrStatus('Couldn’t read the photo: ' + (err && err.message ? err.message : err) + '. Type the date in instead.');
+    } finally {
+      btn.classList.remove('busy');
     }
   });
 

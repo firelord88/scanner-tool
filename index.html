@@ -59,6 +59,11 @@
           <input id="f-name" required placeholder="e.g. Saline 0.9% 1000 mL" list="name-list">
           <datalist id="name-list"></datalist>
         </label>
+        <div class="ocr-box">
+          <label class="file-btn ocr-btn" id="btn-ocr">📷 Read expiry date from photo<input type="file" id="ocr-photo" accept="image/*" capture="environment" hidden></label>
+          <p class="hint" id="ocr-status">Take a close-up photo of the printed expiry date. Always check the result.</p>
+          <div class="chips" id="ocr-chips" hidden></div>
+        </div>
         <div class="row">
           <label>Expiry date *
             <input id="f-expiry" type="date" required>
@@ -115,6 +120,7 @@
 
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="gs1.js"></script>
+  <script src="dates.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
