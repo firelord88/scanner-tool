@@ -177,7 +177,9 @@
     $('form-title').textContent = editing ? 'Edit item' : 'Add item';
     $('btn-save').textContent = editing ? 'Save changes' : 'Save item';
     $('f-expiry').classList.remove('needs-check');
+    $('f-name').classList.remove('needs-check');
     $('ocr-chips').hidden = true;
+    $('ocr-name-chips').hidden = true;
   }
   function clearForm() {
     const keepLocation = $('f-location').value; // usually scanning a whole bag/compartment in a row
@@ -374,7 +376,7 @@
 
   function showDateChoices(cands) {
     const box = $('ocr-chips');
-    box.innerHTML = cands.slice(0, 5).map((c, i) =>
+    box.innerHTML = '<span class="chips-label">Expiry:</span>' + cands.slice(0, 5).map((c, i) =>
       `<button type="button" class="chip${i === 0 ? ' selected' : ''}" data-date="${c.date}">${fmtDate(c.date)}<small>“${esc(c.raw)}”</small></button>`).join('');
     box.hidden = cands.length < 2;
   }
@@ -386,6 +388,32 @@
   });
   $('f-expiry').addEventListener('input', () => $('f-expiry').classList.remove('needs-check'));
 
+  /** OCR lines with their text height (median word height is robust to stray marks). */
+  function ocrLines(data) {
+    return (data.lines || []).filter((l) => l.confidence >= 40).map((l) => {
+      const hs = (l.words || []).map((w) => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b);
+      return { text: l.text.trim(), height: hs.length ? hs[Math.floor(hs.length / 2)] : l.bbox.y1 - l.bbox.y0 };
+    });
+  }
+
+  $('ocr-name-chips').addEventListener('click', (e) => {
+    const b = e.target.closest('.chip');
+    if (!b) return;
+    $('f-name').value = b.dataset.name;
+    $('f-name').classList.remove('needs-check');
+    $('ocr-name-chips').querySelectorAll('.chip').forEach((x) => x.classList.toggle('selected', x === b));
+    applyKnownProduct(b.dataset.name);
+  });
+  $('f-name').addEventListener('input', () => $('f-name').classList.remove('needs-check'));
+
+  /** If this name was saved before, reuse its usual location. */
+  function applyKnownProduct(name) {
+    const same = (n) => (n || '').toLowerCase() === name.toLowerCase();
+    const hit = Object.values(catalog).find((c) => same(c.name)) ||
+      [...items].reverse().find((i) => same(i.name)); // products saved without a barcode
+    if (hit && hit.location && !$('f-location').value) $('f-location').value = hit.location;
+  }
+
   $('ocr-photo').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     e.target.value = '';
@@ -395,13 +423,16 @@
     const btn = $('btn-ocr');
     btn.classList.add('busy');
     $('ocr-chips').hidden = true;
+    $('ocr-name-chips').hidden = true;
     try {
       setOcrStatus('Getting text reader ready… (first time needs internet, ~10 MB)');
       const worker = await getOcrWorker((m) => {
-        if (m.status === 'recognizing text') setOcrStatus(`Reading text… ${Math.round(m.progress * 100)}%`);
+        if (m.status === 'recognizing text') setOcrStatus(`Reading label… ${Math.round(m.progress * 100)}%`);
       });
-      setOcrStatus('Reading text…');
-      let text = (await worker.recognize(await prepareImage(file, false))).data.text;
+      setOcrStatus('Reading label…');
+      const first = (await worker.recognize(await prepareImage(file, false))).data;
+      let text = first.text;
+      const lines = ocrLines(first);
       let cands = ExpiryDates.extract(text);
       if (!cands.length) {
         // Embossed/light-on-dark print often reads better inverted.
@@ -409,20 +440,45 @@
         cands = ExpiryDates.extract(text);
       }
       if (file !== ocrCurrentFile) return; // a newer photo was taken meanwhile
-      if (!cands.length) {
-        setOcrStatus('Couldn’t find a date. Try again closer, in good light, holding the phone straight — or type it in.');
+
+      const knownNames = [...new Set([...Object.values(catalog).map((c) => c.name), ...items.map((i) => i.name)])];
+      const label = LabelText.extract(lines, knownNames);
+      const got = [];
+
+      // Name: only fill if empty (don't overwrite a name that came from a barcode scan or typing).
+      if (label.names.length) {
+        const box = $('ocr-name-chips');
+        box.innerHTML = '<span class="chips-label">Name:</span>' + label.names.map((n, i) =>
+          `<button type="button" class="chip" data-name="${esc(n)}">${esc(n)}</button>`).join('');
+        box.hidden = false;
+        if (!$('f-name').value.trim()) {
+          $('f-name').value = label.names[0];
+          $('f-name').classList.add('needs-check');
+          box.querySelector('.chip').classList.add('selected');
+          applyKnownProduct(label.names[0]);
+          got.push('name');
+        }
+      }
+      if (label.lot && !$('f-lot').value.trim()) { $('f-lot').value = label.lot; got.push('lot'); }
+      if (cands.length) {
+        $('f-expiry').value = cands[0].date;
+        $('f-expiry').classList.add('needs-check');
+        showDateChoices(cands);
+        got.push('expiry');
+      }
+
+      if (!got.length && !label.names.length) {
+        setOcrStatus('Couldn’t read the label. Try again closer, in good light, holding the phone straight — or type it in.');
         return;
       }
-      $('f-expiry').value = cands[0].date;
-      $('f-expiry').classList.add('needs-check');
-      showDateChoices(cands);
-      setOcrStatus(cands.length > 1
-        ? `Found ${cands.length} dates — picked ${fmtDate(cands[0].date)}. Tap another if that’s wrong. Check against the package.`
-        : `Found ${fmtDate(cands[0].date)} (read as “${cands[0].raw}”). Check it against the package.`);
+      const missing = [!$('f-name').value.trim() && 'name', !$('f-expiry').value && 'expiry date'].filter(Boolean);
+      setOcrStatus((got.length ? `Filled in ${got.join(', ')} from the photo. ` : '') +
+        'Check the highlighted fields against the package — tap a suggestion to change it.' +
+        (missing.length ? ` Couldn’t find the ${missing.join(' or ')}: type it in or take a closer photo.` : ''));
       if (navigator.vibrate) navigator.vibrate(80);
-      $('f-expiry').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      $('f-name').scrollIntoView({ behavior: 'smooth', block: 'center' });
     } catch (err) {
-      setOcrStatus('Couldn’t read the photo: ' + (err && err.message ? err.message : err) + '. Type the date in instead.');
+      setOcrStatus('Couldn’t read the photo: ' + (err && err.message ? err.message : err) + '. Type the details in instead.');
     } finally {
       btn.classList.remove('busy');
     }

@@ -1,7 +1,7 @@
 // Offline support: cache the app shell so it opens with no signal.
-const CACHE = 'expiry-v2';
+const CACHE = 'expiry-v3';
 const ASSETS = [
-  './', 'index.html', 'styles.css', 'app.js', 'gs1.js', 'dates.js', 'manifest.webmanifest', 'icon.svg',
+  './', 'index.html', 'styles.css', 'app.js', 'gs1.js', 'dates.js', 'label.js', 'manifest.webmanifest', 'icon.svg',
   'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js',
 ];
 

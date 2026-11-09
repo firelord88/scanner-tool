@@ -60,8 +60,9 @@
           <datalist id="name-list"></datalist>
         </label>
         <div class="ocr-box">
-          <label class="file-btn ocr-btn" id="btn-ocr">📷 Read expiry date from photo<input type="file" id="ocr-photo" accept="image/*" capture="environment" hidden></label>
-          <p class="hint" id="ocr-status">Take a close-up photo of the printed expiry date. Always check the result.</p>
+          <label class="file-btn ocr-btn" id="btn-ocr">📷 Read label from photo<input type="file" id="ocr-photo" accept="image/*" capture="environment" hidden></label>
+          <p class="hint" id="ocr-status">Photograph the label to fill in the name, expiry date and lot. Always check the result.</p>
+          <div class="chips" id="ocr-name-chips" hidden></div>
           <div class="chips" id="ocr-chips" hidden></div>
         </div>
         <div class="row">
@@ -121,6 +122,7 @@
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="gs1.js"></script>
   <script src="dates.js"></script>
+  <script src="label.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

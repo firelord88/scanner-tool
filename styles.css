@@ -146,6 +146,7 @@ button.primary { background: var(--brand); border-color: var(--brand); color: #f
 .ocr-btn { width: 100%; }
 .ocr-btn.busy { opacity: .6; pointer-events: none; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.chips-label { align-self: center; font-size: .8rem; color: var(--muted); }
 .chip { min-height: 36px; padding: 6px 12px; border-radius: 999px; font-size: .85rem; }
 .chip.selected { background: var(--brand); border-color: var(--brand); color: #fff; }
 .chip small { font-weight: 400; opacity: .8; margin-left: 4px; }
