@@ -1,0 +1,8 @@
+{
+  "name": "scanner-tool",
+  "private": true,
+  "scripts": {
+    "test": "node test/gs1.test.js",
+    "start": "npx --yes http-server -c-1 -p 8080 ."
+  }
+}
