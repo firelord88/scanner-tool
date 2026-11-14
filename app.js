@@ -165,6 +165,7 @@
   });
 
   // ---------- Form ----------
+  let expiryFromBarcode = false; // true when the expiry came from a GS1 barcode (exact) — photos won't overwrite it
   function fillForm(it, editing) {
     $('f-id').value = editing ? it.id : '';
     $('f-barcode').value = it.barcode || '';
@@ -180,6 +181,7 @@
     $('f-name').classList.remove('needs-check');
     $('ocr-chips').hidden = true;
     $('ocr-name-chips').hidden = true;
+    expiryFromBarcode = false;
   }
   function clearForm() {
     const keepLocation = $('f-location').value; // usually scanning a whole bag/compartment in a row
@@ -242,7 +244,7 @@
       if (!$('f-location').value && known.location) $('f-location').value = known.location;
     }
     const found = [];
-    if (g && g.expiry) { $('f-expiry').value = g.expiry; found.push('expiry'); }
+    if (g && g.expiry) { $('f-expiry').value = g.expiry; expiryFromBarcode = true; found.push('expiry'); }
     if (g && g.lot) { $('f-lot').value = g.lot; found.push('lot'); }
 
     if (navigator.vibrate) navigator.vibrate(80);
@@ -378,7 +380,7 @@
     const box = $('ocr-chips');
     box.innerHTML = '<span class="chips-label">Expiry:</span>' + cands.slice(0, 5).map((c, i) =>
       `<button type="button" class="chip${i === 0 ? ' selected' : ''}" data-date="${c.date}">${fmtDate(c.date)}<small>“${esc(c.raw)}”</small></button>`).join('');
-    box.hidden = cands.length < 2;
+    box.hidden = !cands.length; // always show what was read, so a wrong pick is easy to spot and fix
   }
   $('ocr-chips').addEventListener('click', (e) => {
     const b = e.target.closest('.chip');
@@ -386,7 +388,7 @@
     $('f-expiry').value = b.dataset.date;
     $('ocr-chips').querySelectorAll('.chip').forEach((x) => x.classList.toggle('selected', x === b));
   });
-  $('f-expiry').addEventListener('input', () => $('f-expiry').classList.remove('needs-check'));
+  $('f-expiry').addEventListener('input', () => { $('f-expiry').classList.remove('needs-check'); expiryFromBarcode = false; });
 
   /** OCR lines with their text height (median word height is robust to stray marks). */
   function ocrLines(data) {
@@ -460,7 +462,11 @@
         }
       }
       if (label.lot && !$('f-lot').value.trim()) { $('f-lot').value = label.lot; got.push('lot'); }
-      if (cands.length) {
+      if (cands.length && expiryFromBarcode) {
+        // The barcode's expiry is exact; keep it and just show what the photo said.
+        showDateChoices(cands);
+        $('ocr-chips').querySelectorAll('.chip').forEach((x) => x.classList.toggle('selected', x.dataset.date === $('f-expiry').value));
+      } else if (cands.length) {
         $('f-expiry').value = cands[0].date;
         $('f-expiry').classList.add('needs-check');
         showDateChoices(cands);

@@ -43,7 +43,13 @@
     const MON = '(' + Object.keys(MONTHS).sort((a, b) => b.length - a.length).join('|') + ')\\.?';
     const SEP = '\\s*[\\/\\-.]\\s*';
 
+    // [regex, toISO, strength]. Strength reflects how unlikely the format is to be something else.
     const patterns = [
+      // GS1 human-readable text under a barcode: (17)270531 — always the expiry date.
+      [/\(\s*17\s*\)\s*(\d{6})/g, (m) => {
+        const s = m[1];
+        return iso(+s.slice(0, 2), +s.slice(2, 4), +s.slice(4, 6) || null);
+      }, 20],
       // 2027-05-31, 2027/05/31, 2027.05.31
       [new RegExp(`\\b(20\\d{2})${SEP}(\\d{1,2})${SEP}(\\d{1,2})\\b`, 'g'), (m) => iso(+m[1], +m[2], +m[3])],
       // 31/05/2027 or 05/31/2027 (also 2-digit years: 31/05/27)
@@ -52,13 +58,13 @@
         let d, mo;
         if (a > 12) { d = a; mo = b; } else if (b > 12) { d = b; mo = a; } else if (dayFirst) { d = a; mo = b; } else { d = b; mo = a; }
         return iso(+m[3], mo, d);
-      }],
+      }, -1],
       // 2027-05, 2027/05
       [new RegExp(`\\b(20\\d{2})${SEP}(\\d{1,2})\\b(?!${SEP}\\d)`, 'g'), (m) => iso(+m[1], +m[2])],
       // 05/2027, 05-2027
       [new RegExp(`(?<![\\d\\/\\-.])(\\d{1,2})${SEP}(20\\d{2})\\b`, 'g'), (m) => iso(+m[2], +m[1])],
       // 05/27 (month/2-digit year) — only when not part of a longer date
-      [new RegExp(`(?<![\\d\\/\\-.])(\\d{1,2})\\s*[\\/\\-]\\s*(\\d{2})(?![\\d\\/\\-.])`, 'g'), (m) => (+m[1] <= 12 ? iso(+m[2], +m[1]) : null)],
+      [new RegExp(`(?<![\\d\\/\\-.])(\\d{1,2})\\s*[\\/\\-]\\s*(\\d{2})(?![\\d\\/\\-.])`, 'g'), (m) => (+m[1] <= 12 ? iso(+m[2], +m[1]) : null), -4],
       // 31 MAY 2027, 31-MAY-27, 31MAY2027
       [new RegExp(`\\b(\\d{1,2})[\\s\\-./]*${MON}[\\s\\-./,]*(20\\d{2}|\\d{2})\\b`, 'g'), (m) => iso(+m[3], MONTHS[m[2]], +m[1])],
       // MAY 31, 2027
@@ -74,17 +80,22 @@
       }],
     ];
 
-    for (const [re, toISO] of patterns) {
+    const thisYear = new Date().getFullYear();
+    for (const [re, toISO, strength = 0] of patterns) {
       let m;
       while ((m = re.exec(src))) {
         const date = toISO(m);
         if (!date) continue;
+        // Expiry dates on stock in use are realistically within a few years either side of today.
+        // This throws out "1/99" -> 2099, "12/50" -> 2050 and similar misreads.
+        const year = +date.slice(0, 4);
+        if (year < thisYear - 5 || year > thisYear + 10) continue;
         const start = m.index, end = m.index + m[0].length;
         // Ignore matches that overlap a more specific match already found (e.g. "05/2027" inside "31/05/2027").
         if (found.some((f) => start < f.end && end > f.start)) continue;
         const before = src.slice(Math.max(0, start - 25), start);
         const line = before.split('\n').pop();
-        let score = 0;
+        let score = strength;
         if (EXP_WORDS.test(m[0]) || EXP_WORDS.test(line)) score += 10;
         else if (MFG_WORDS.test(line)) score -= 10;
         found.push({ date, raw: m[0].trim(), score, start, end });
