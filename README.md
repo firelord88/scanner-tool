@@ -6,7 +6,8 @@ A phone web app for scanning ambulance supplies and keeping track of their expir
 
 - **Scan barcodes with the phone camera.** It reads the square DataMatrix codes, QR codes and normal 1-D barcodes (EAN/UPC, Code 128, GS1 DataBar…). If the camera doesn't work, you can **scan a photo** or type the code. Bluetooth or USB barcode scanners also work: tap the Barcode field and scan.
 - **Fills in expiry and lot automatically** when the item has a GS1 barcode. Most medical supplies and drugs do: it's the code that holds `(01)` GTIN, `(17)` expiry and `(10)` lot.
-- **Reads the label from a photo.** For items with no barcode, or a barcode without the date, tap *Read label from photo* and photograph the label. It fills in:
+- **Finds the barcode in a photo.** *Scan photo* and *Read label from photo* search the whole picture for a barcode. They find small, faint, sideways or slightly tilted codes, like the square codes on IV catheter strips, and read the exact expiry and lot from them.
+- **Reads the label from a photo.** If there's no usable barcode, *Read label from photo* reads the printed text, including sideways print. It fills in:
   - **Name:** the biggest text on the label, or a product you've saved before if its name appears. Other possible names are shown as buttons you can tap.
   - **Expiry date:** common formats like `EXP 2027-05`, `05/2027`, `15 MAY 2027` and `31/05/27`. It skips manufacture dates. A month-only date counts as the last day of that month.
   - **Lot / batch** number.

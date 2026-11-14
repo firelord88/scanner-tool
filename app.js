@@ -319,12 +319,10 @@
     const s = getScanner();
     if (!s) return;
     await stopCamera();
-    try {
-      const text = await s.scanFile(file, false);
-      handleCode(text);
-    } catch (err) {
-      $('scan-status').textContent = 'No barcode found in that photo. Try again closer, with good light.';
-    }
+    $('scan-status').textContent = 'Looking for a barcode in the photo…';
+    const text = await findBarcodeInPhoto(file);
+    if (text) handleCode(text);
+    else $('scan-status').textContent = 'No barcode found in that photo. Try again closer, with good light — or use “Read label from photo”.';
   });
 
   // ---------- Read printed expiry date from a photo (OCR) ----------
@@ -350,13 +348,49 @@
   }
 
   /** Shrink, greyscale and boost contrast so small printed/embossed text reads better. */
-  async function prepareImage(file, invert) {
+  /**
+   * Black/white each pixel against the average brightness around it (not the whole photo), so faint
+   * grey print on a white label still stands out when the rest of the photo is hands, floor, shadows.
+   * radius is in pixels; offset is how much darker than its surroundings a pixel must be to count as ink.
+   */
+  function adaptiveThreshold(ctx, W, H, radius, offset) {
+    const im = ctx.getImageData(0, 0, W, H), d = im.data, g = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) g[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2];
+    const S = new Float64Array((W + 1) * (H + 1)); // summed-area table
+    for (let y = 0; y < H; y++) {
+      let row = 0;
+      for (let x = 0; x < W; x++) { row += g[y * W + x]; S[(y + 1) * (W + 1) + x + 1] = S[y * (W + 1) + x + 1] + row; }
+    }
+    for (let y = 0; y < H; y++) {
+      const y0 = Math.max(0, y - radius), y1 = Math.min(H, y + radius + 1);
+      for (let x = 0; x < W; x++) {
+        const x0 = Math.max(0, x - radius), x1 = Math.min(W, x + radius + 1);
+        const mean = (S[y1 * (W + 1) + x1] - S[y0 * (W + 1) + x1] - S[y1 * (W + 1) + x0] + S[y0 * (W + 1) + x0]) / ((x1 - x0) * (y1 - y0));
+        const v = g[y * W + x] < mean - offset ? 0 : 255;
+        const k = 4 * (y * W + x);
+        d[k] = d[k + 1] = d[k + 2] = v;
+      }
+    }
+    ctx.putImageData(im, 0, 0);
+  }
+
+  /** Photo -> canvas for the text reader. rotate = 90/-90 turns sideways-printed text level. */
+  async function prepareImage(file, { invert = false, rotate = 0, adaptive = false } = {}) {
     const bmp = await createImageBitmap(file);
     const scale = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+    const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
     const c = document.createElement('canvas');
-    c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+    if (rotate) { c.width = h; c.height = w; } else { c.width = w; c.height = h; }
     const ctx = c.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(bmp, 0, 0, c.width, c.height);
+    ctx.translate(c.width / 2, c.height / 2);
+    ctx.rotate((rotate * Math.PI) / 180);
+    ctx.drawImage(bmp, -w / 2, -h / 2, w, h);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (adaptive) {
+      adaptiveThreshold(ctx, c.width, c.height, Math.round(Math.max(c.width, c.height) / 60), 10);
+      return c;
+    }
+    // Plain greyscale + contrast stretch (best for big, clear print like product names).
     const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
     let min = 255, max = 0;
     for (let i = 0; i < d.length; i += 4) {
@@ -371,6 +405,29 @@
     }
     ctx.putImageData(img, 0, 0);
     return c;
+  }
+
+  /**
+   * Find a barcode anywhere in a phone photo (small, faint, sideways or slightly tilted codes too).
+   * Uses barcode-find.js + the ZXing decoder, downloaded on first use. Returns the decoded text or null.
+   */
+  const ZXING_URL = 'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js';
+  let zxingPromise = null;
+  async function findBarcodeInPhoto(file) {
+    try {
+      if (!window.ZXing) {
+        zxingPromise = zxingPromise || loadScript(ZXING_URL).catch((e) => { zxingPromise = null; throw e; });
+        await zxingPromise;
+      }
+      const bmp = await createImageBitmap(file);
+      await new Promise((r) => setTimeout(r, 30)); // let the status message paint before the busy work
+      return BarcodeFinder.find(bmp);
+    } catch (e) {
+      // Reader didn't download (no signal): fall back to the camera library's simpler photo decoder.
+      const s = getScanner();
+      if (!s) return null;
+      try { return await s.scanFile(file, false); } catch (err) { return null; }
+    }
   }
 
   let ocrCurrentFile = null;
@@ -431,20 +488,50 @@
       const worker = await getOcrWorker((m) => {
         if (m.status === 'recognizing text') setOcrStatus(`Reading label… ${Math.round(m.progress * 100)}%`);
       });
+      // 1. A barcode in the photo gives the exact expiry and lot, so look for one first.
+      setOcrStatus('Looking for a barcode in the photo…');
+      const code = await findBarcodeInPhoto(file);
+      if (file !== ocrCurrentFile) return;
+      let barcodeUsed = false;
+      if (code) {
+        const g = GS1.parse(code);
+        handleCode(code);
+        barcodeUsed = !!(g && g.expiry);
+      }
+
+      // 2. Read the text, mainly for the product name (big print reads best without the contrast boost).
       setOcrStatus('Reading label…');
-      const first = (await worker.recognize(await prepareImage(file, false))).data;
+      await worker.setParameters({ tessedit_pageseg_mode: '3' });
+      const first = (await worker.recognize(await prepareImage(file))).data;
       let text = first.text;
       const lines = ocrLines(first);
       let cands = ExpiryDates.extract(text);
-      if (!cands.length) {
+      let sideLines = [];
+
+      // 3. No exact date yet: hunt for small print (dates, lot) anywhere on the label — scattered-text
+      //    mode with area-by-area contrast, the right way up and turned both ways (pouches and strips
+      //    often print them sideways).
+      if (!barcodeUsed && !cands.some((c) => c.score >= 10)) {
+        await worker.setParameters({ tessedit_pageseg_mode: '11' });
+        for (const rot of [0, 90, -90]) {
+          setOcrStatus(rot ? 'Checking for sideways text…' : 'Looking for small print…');
+          const pass = (await worker.recognize(await prepareImage(file, { rotate: rot, adaptive: true }))).data;
+          text += '\n' + pass.text;
+          sideLines = sideLines.concat(ocrLines(pass));
+        }
+        await worker.setParameters({ tessedit_pageseg_mode: '3' });
+        cands = ExpiryDates.extract(text);
+      }
+      if (!barcodeUsed && !cands.length) {
         // Embossed/light-on-dark print often reads better inverted.
-        text += '\n' + (await worker.recognize(await prepareImage(file, true))).data.text;
+        text += '\n' + (await worker.recognize(await prepareImage(file, { invert: true }))).data.text;
         cands = ExpiryDates.extract(text);
       }
       if (file !== ocrCurrentFile) return; // a newer photo was taken meanwhile
 
       const knownNames = [...new Set([...Object.values(catalog).map((c) => c.name), ...items.map((i) => i.name)])];
       const label = LabelText.extract(lines, knownNames);
+      if (!label.lot && sideLines.length) label.lot = LabelText.extract(sideLines, []).lot;
       const got = [];
 
       // Name: only fill if empty (don't overwrite a name that came from a barcode scan or typing).
@@ -473,12 +560,13 @@
         got.push('expiry');
       }
 
-      if (!got.length && !label.names.length) {
+      if (!got.length && !label.names.length && !barcodeUsed) {
         setOcrStatus('Couldn’t read the label. Try again closer, in good light, holding the phone straight — or type it in.');
         return;
       }
       const missing = [!$('f-name').value.trim() && 'name', !$('f-expiry').value && 'expiry date'].filter(Boolean);
-      setOcrStatus((got.length ? `Filled in ${got.join(', ')} from the photo. ` : '') +
+      setOcrStatus((barcodeUsed ? 'Read the barcode: expiry and lot are exact. ' : '') +
+        (got.length ? `Filled in ${got.join(', ')} from the photo. ` : '') +
         'Check the highlighted fields against the package — tap a suggestion to change it.' +
         (missing.length ? ` Couldn’t find the ${missing.join(' or ')}: type it in or take a closer photo.` : ''));
       if (navigator.vibrate) navigator.vibrate(80);
